@@ -52,6 +52,8 @@ def thread_ouvinte_udp():
                 with lock_tabela:
                     tabela_roteamento[ip] = {"metrica": 1, "ip_saida": ip}
                     vizinhos_ativos[ip] = time.time()
+                    if ip not in vizinhos:
+                        vizinhos.append(ip)
                     print(f"Novo vizinho adicionado: {ip}")
 
             elif mensagem.startswith("#"):
