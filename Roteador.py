@@ -3,10 +3,10 @@ import threading
 import time
 
 # --- Constantes ---
-PORTA_UDP = 9000
+PORTA_UDP = 9000  # Porta UDP para comunicação entre roteadores
 TEMPO_ANUNCIO = 15  # Segundos para anunciar rotas
 TEMPO_TIMEOUT = 35  # Segundos para considerar um vizinho morto
-MEU_IP = "10.231.77.125"  # Você precisará descobrir isso dinamicamente ou configurar
+MEU_IP = "10.231.77.161"  # IP deste roteador
 
 # --- Estruturas de Dados ---
 # Tabela de Roteamento: { "ip_destino": {"metrica": 1, "ip_saida": "192.x.x.x"} }
@@ -23,16 +23,15 @@ vizinhos_ativos = {}
 # já que várias threads vão acessá-la.
 lock_tabela = threading.Lock()
 
+
 # --- Funções das Threads ---
-
-
 def thread_ouvinte_udp():
     """
     Thread 1: Ouve a porta 9000 por qualquer mensagem UDP.
     """
     print(f"Ouvindo na porta {PORTA_UDP}...")
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.bind(("", PORTA_UDP))  # Ouve em todas as interfaces
+        s.bind(("", PORTA_UDP))
 
         while True:
             dados, endereco = s.recvfrom(1024)
@@ -52,19 +51,17 @@ def thread_ouvinte_udp():
                 with lock_tabela:
                     tabela_roteamento[ip] = {"metrica": 1, "ip_saida": ip}
                     vizinhos_ativos[ip] = time.time()
-                    if ip not in vizinhos:
-                        vizinhos.append(ip)
                     print(f"Novo vizinho adicionado: {ip}")
 
+            # Parte 1: Anúncio de Rotas
             elif mensagem.startswith("#"):
-                # Parte 1: Anúncio de Rotas
-                rotas = mensagem.split("#")[1:]  # Ignorar o # inicial
+                rotas = mensagem.split("#")[1:]
                 with lock_tabela:
                     for rota in rotas:
                         destino, metrica_str = rota.split("-")
 
-                        if destino == MEU_IP:
-                            continue  # Ignorar rotas para mim mesmo
+                        if destino == MEU_IP:  # Ignorar rotas para mim mesmo
+                            continue
 
                         metrica = int(metrica_str)
                         metrica_atual = tabela_roteamento.get(
@@ -78,13 +75,17 @@ def thread_ouvinte_udp():
                                 "metrica": nova_metrica,
                                 "ip_saida": ip_origem,
                             }
+                            print(
+                                f"Rota atualizada: {destino} via {ip_origem} (métrica {nova_metrica})"
+                            )
                             enviar_tabela_rotas(s)
 
+            # Parte 2: Mensagem de texto
             elif mensagem.startswith("!"):
-                # Parte 2: Mensagem de texto [cite: 93, 101]
+                #
                 try:
-                    # Tenta quebrar a mensagem. maxsplit=2 garante que o texto
-                    # da mensagem, mesmo se tiver ';', não seja quebrado.
+                    
+                    # Dividir a mensagem em partes
                     partes = mensagem[1:].split(";", 2)
 
                     if len(partes) != 3:
@@ -93,7 +94,7 @@ def thread_ouvinte_udp():
 
                     ip_origem_msg, ip_destino_msg, texto_msg = partes
 
-                    # Verificar se a mensagem é para mim [cite: 96]
+                    # Verificar se a mensagem é para mim
                     if ip_destino_msg == MEU_IP:
                         print("\n======================================")
                         print("MENSAGEM RECEBIDA (DESTINO FINAL)")
@@ -135,7 +136,10 @@ def thread_anunciante_rotas():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         while True:
             time.sleep(TEMPO_ANUNCIO)
+            print("\n======================================")
+            print("Tabela de Roteamento Anunciada:")
             print(tabela_roteamento)
+            print("\n======================================")
             enviar_tabela_rotas(s)
 
 
@@ -187,9 +191,9 @@ def enviar_tabela_rotas(s):
         for destino, info in tabela_roteamento.items():
             mensagem_rotas += f"#{destino}-{info['metrica']}"
 
+    # Enviar a mensagem para todos os vizinhos ativos
     if mensagem_rotas:
-        print("Enviando anúncio de rotas...")
-        for vizinho in vizinhos:
+        for vizinho in vizinhos_ativos.keys():
             print(f"Enviando para {vizinho}: {mensagem_rotas}")
             s.sendto(mensagem_rotas.encode("utf-8"), (vizinho, PORTA_UDP))
 
