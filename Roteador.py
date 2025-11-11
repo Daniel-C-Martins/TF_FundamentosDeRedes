@@ -6,7 +6,7 @@ import time
 PORTA_UDP = 9000  # Porta UDP para comunicação entre roteadores
 TEMPO_ANUNCIO = 15  # Segundos para anunciar rotas
 TEMPO_TIMEOUT = 35  # Segundos para considerar um vizinho morto
-MEU_IP = "10.231.77.161"  # IP deste roteador
+MEU_IP = "10.32.162.212"  # IP deste roteador
 
 # --- Estruturas de Dados ---
 # Tabela de Roteamento: { "ip_destino": {"metrica": 1, "ip_saida": "192.x.x.x"} }
@@ -75,6 +75,7 @@ def thread_ouvinte_udp():
                                 "metrica": nova_metrica,
                                 "ip_saida": ip_origem,
                             }
+                            vizinhos_ativos[ip_origem] = time.time()
                             print(
                                 f"Rota atualizada: {destino} via {ip_origem} (métrica {nova_metrica})"
                             )
@@ -84,7 +85,7 @@ def thread_ouvinte_udp():
             elif mensagem.startswith("!"):
                 #
                 try:
-                    
+
                     # Dividir a mensagem em partes
                     partes = mensagem[1:].split(";", 2)
 
@@ -179,6 +180,9 @@ def thread_monitor_timeout():
                 for vizinho in vizinhos_mortos:
                     if vizinho in vizinhos_ativos:
                         del vizinhos_ativos[vizinho]
+
+                # with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                #     enviar_tabela_rotas(s)
 
                 print(f"Tabela atualizada após remoção: {tabela_roteamento}")
 
