@@ -54,20 +54,35 @@ def thread_ouvinte_udp():
                     print(f"Novo vizinho adicionado: {ip}")
 
             # Parte 1: Anúncio de Rotas
+            # Parte 1: Anúncio de Rotas
+            # Parte 1: Anúncio de Rotas
             elif mensagem.startswith("#"):
-                rotas = mensagem.split("#")[1:]
-                with lock_tabela:
-                    for rota in rotas:
-                        destino, metrica_str = rota.split("-")
+                rotas_raw = mensagem.split("#")[1:]
+                
+                mudanca_ocorreu = False
+                
+                # Criar um 'set' de destinos que acabaram de ser recebidos
+                destinos_recebidos = set() 
 
-                        if destino == MEU_IP:  # Ignorar rotas para mim mesmo
+                with lock_tabela:
+                    # 1. Encontrar quais rotas APRENDEMOS com este vizinho
+                    rotas_atuais_deste_vizinho = []
+                    for destino, info in tabela_roteamento.items():
+                        if info["ip_saida"] == ip_origem:
+                            rotas_atuais_deste_vizinho.append(destino)
+
+                    # 2. Processar as rotas recém-chegadas (adicionar/atualizar)
+                    for rota_str in rotas_raw:
+                        destino, metrica_str = rota_str.split("-")
+                        destinos_recebidos.add(destino) # Adicionar ao set
+
+                        if destino == MEU_IP:
                             continue
 
                         metrica = int(metrica_str)
                         metrica_atual = tabela_roteamento.get(
                             destino, {"metrica": float("inf")}
                         )["metrica"]
-
                         nova_metrica = metrica + 1
 
                         if nova_metrica < metrica_atual:
@@ -77,9 +92,25 @@ def thread_ouvinte_udp():
                             }
                             vizinhos_ativos[ip_origem] = time.time()
                             print(
-                                f"Rota atualizada: {destino} via {ip_origem} (métrica {nova_metrica})"
+                                f"Rota ATUALIZADA: {destino} via {ip_origem} (métrica {nova_metrica})"
                             )
-                            enviar_tabela_rotas(s)
+                            mudanca_ocorreu = True
+                    
+                    # 3. IMPLEMENTAR A REGRA  (Remover rotas órfãs)
+                    # Para cada rota que tínhamos via 'ip_origem'...
+                    for destino_antigo in rotas_atuais_deste_vizinho:
+                        # ...verificar se ela NÃO veio no novo anúncio
+                        if destino_antigo not in destinos_recebidos:
+                            # Se não veio, é uma rota órfã. Remover.
+                            del tabela_roteamento[destino_antigo]
+                            print(
+                                f"Rota REMOVIDA: {destino_antigo} (via {ip_origem}) não foi mais anunciada."
+                            )
+                            mudanca_ocorreu = True
+                
+                # 4. Envia o anúncio imediato APÓS soltar o lock
+                if mudanca_ocorreu:
+                    enviar_tabela_rotas(s)
 
             # Parte 2: Mensagem de texto
             elif mensagem.startswith("!"):
