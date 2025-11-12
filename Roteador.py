@@ -54,15 +54,13 @@ def thread_ouvinte_udp():
                     print(f"Novo vizinho adicionado: {ip}")
 
             # Parte 1: Anúncio de Rotas
-            # Parte 1: Anúncio de Rotas
-            # Parte 1: Anúncio de Rotas
             elif mensagem.startswith("#"):
                 rotas_raw = mensagem.split("#")[1:]
-                
+
                 mudanca_ocorreu = False
-                
+
                 # Criar um 'set' de destinos que acabaram de ser recebidos
-                destinos_recebidos = set() 
+                destinos_recebidos = set()
 
                 with lock_tabela:
                     # 1. Encontrar quais rotas APRENDEMOS com este vizinho
@@ -74,7 +72,7 @@ def thread_ouvinte_udp():
                     # 2. Processar as rotas recém-chegadas (adicionar/atualizar)
                     for rota_str in rotas_raw:
                         destino, metrica_str = rota_str.split("-")
-                        destinos_recebidos.add(destino) # Adicionar ao set
+                        destinos_recebidos.add(destino)  # Adicionar ao set
 
                         if destino == MEU_IP:
                             continue
@@ -95,10 +93,18 @@ def thread_ouvinte_udp():
                                 f"Rota ATUALIZADA: {destino} via {ip_origem} (métrica {nova_metrica})"
                             )
                             mudanca_ocorreu = True
-                    
-                    # 3. IMPLEMENTAR A REGRA  (Remover rotas órfãs)
+
+                    # 3. IMPLEMENTAR A REGRA (Remover rotas órfãs)
                     # Para cada rota que tínhamos via 'ip_origem'...
                     for destino_antigo in rotas_atuais_deste_vizinho:
+
+                        # --- INÍCIO DA CORREÇÃO ---
+                        # NUNCA remova a rota para o próprio vizinho
+                        # (A rota de Métrica 1). Ela só morre por timeout.
+                        if destino_antigo == ip_origem:
+                            continue
+                        # --- FIM DA CORREÇÃO ---
+
                         # ...verificar se ela NÃO veio no novo anúncio
                         if destino_antigo not in destinos_recebidos:
                             # Se não veio, é uma rota órfã. Remover.
@@ -107,7 +113,7 @@ def thread_ouvinte_udp():
                                 f"Rota REMOVIDA: {destino_antigo} (via {ip_origem}) não foi mais anunciada."
                             )
                             mudanca_ocorreu = True
-                
+
                 # 4. Envia o anúncio imediato APÓS soltar o lock
                 if mudanca_ocorreu:
                     enviar_tabela_rotas(s)
