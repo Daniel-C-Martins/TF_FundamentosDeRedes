@@ -6,7 +6,7 @@ import time
 PORTA_UDP = 9000  # Porta UDP para comunicação entre roteadores
 TEMPO_ANUNCIO = 15  # Segundos para anunciar rotas
 TEMPO_TIMEOUT = 35  # Segundos para considerar um vizinho morto
-MEU_IP = "10.32.162.212"  # IP deste roteador
+MEU_IP = "10.231.77.125"  # IP deste roteador
 
 # --- Estruturas de Dados ---
 # Tabela de Roteamento: { "ip_destino": {"metrica": 1, "ip_saida": "192.x.x.x"} }
@@ -191,6 +191,8 @@ def enviar_tabela_rotas(s):
     """
     Envia a tabela de rotas para todos os vizinhos ativos, aplicando
     a regra de Split Horizon.
+    Envia uma mensagem vazia (keep-alive) se a regra
+    remover todas as rotas.
     """
 
     # 1. Obter uma "foto" (snapshot) da tabela e dos vizinhos
@@ -198,8 +200,15 @@ def enviar_tabela_rotas(s):
     with lock_tabela:
         # Copiamos para evitar problemas se a lista mudar
         # enquanto iteramos sobre ela (fora do lock)
-        vizinhos_para_enviar = list(vizinhos_ativos.keys())
-        tabela_copia = dict(tabela_roteamento)
+        try:
+            # Usar .keys() pode dar erro se o dict for modificado
+            # em outra thread, mesmo com lock.
+            vizinhos_para_enviar = list(vizinhos_ativos.keys())
+            tabela_copia = dict(tabela_roteamento)
+        except RuntimeError:
+            # Dicionário foi alterado durante a iteração,
+            # pular este ciclo. Acontecerá de novo em 15s.
+            return
 
     # 2. Iterar sobre os vizinhos FORA do lock, para não bloquear
     #    outras threads (como a ouvinte) enquanto enviamos pacotes.
@@ -209,24 +218,18 @@ def enviar_tabela_rotas(s):
         # 3. Construir uma mensagem personalizada para ESTE vizinho
         for destino, info in tabela_copia.items():
 
-            # --- AQUI ESTÁ A SUA REGRA (SPLIT HORIZON) ---
-            # Se o IP de saída para este destino é o vizinho para
-            # quem estamos prestes a enviar, PULE esta rota.
+            # --- AQUI ESTÁ A REGRA (SPLIT HORIZON) ---
             if info["ip_saida"] == vizinho:
                 continue  # Não anunciar a rota de volta para quem a ensinou
 
-            # Se a regra não se aplica, adicione a rota à mensagem
             mensagem_rotas += f"#{destino}-{info['metrica']}"
 
-        # 4. Enviar a mensagem personalizada (se houver algo para enviar)
-        if mensagem_rotas:
-            print(f"Enviando (Split Horizon) para {vizinho}: {mensagem_rotas}")
-            s.sendto(mensagem_rotas.encode("utf-8"), (vizinho, PORTA_UDP))
-        else:
-            # Opcional: bom para debug, mostra que a regra funcionou
-            print(
-                f"Enviando (Split Horizon) para {vizinho}: (Nenhuma rota para anunciar)"
-            )
+        # 4. Enviar a mensagem (mesmo que vazia, como keep-alive)
+        #    para reiniciar o timer de 35s do vizinho.
+        print(
+            f"Enviando (Split Horizon) para {vizinho}: {mensagem_rotas if mensagem_rotas else '(keep-alive)'}"
+        )
+        s.sendto(mensagem_rotas.encode("utf-8"), (vizinho, PORTA_UDP))
 
 
 # --- Função Principal (Inicialização) ---
