@@ -54,7 +54,7 @@ def thread_ouvinte_udp():
                     print(f"Novo vizinho adicionado: {ip}")
 
             # Parte 1: Anúncio de Rotas
-            elif mensagem.startswith("#"):
+            elif mensagem == "" or mensagem.startswith("#"):
                 rotas_raw = mensagem.split("#")[1:]
 
                 mudanca_ocorreu = False
