@@ -6,21 +6,19 @@ import time
 PORTA_UDP = 9000  # Porta UDP para comunicação entre roteadores
 TEMPO_ANUNCIO = 15  # Segundos para anunciar rotas
 TEMPO_TIMEOUT = 35  # Segundos para considerar um vizinho morto
-MEU_IP = "10.231.77.125"  # !!! MUDE AQUI: IP deste roteador !!!
+MEU_IP = "10.231.77.125"  # Ip do roteador atual
 
 # --- Estruturas de Dados ---
 # Tabela de Roteamento: { "ip_destino": {"metrica": 1, "ip_saida": "192.x.x.x"} }
 tabela_roteamento = {}
 
 # Lista de Vizinhos: "ip_vizinho"
-# Você vai ler isso do 'roteadores.txt'
 vizinhos = []
 
 # Rastreamento de Timeout: { "ip_vizinho": tempo_da_ultima_mensagem }
 vizinhos_ativos = {}
 
-# Trava (Lock) para proteger o acesso à tabela de roteamento,
-# já que várias threads vão acessá-la.
+# Trava (Lock) para proteger o acesso à tabela de roteamento
 lock_tabela = threading.Lock()
 
 
@@ -38,7 +36,7 @@ def thread_ouvinte_udp():
             ip_origem = endereco[0]
             mensagem = dados.decode("utf-8")
 
-            # Colchetes ajudam a ver mensagens vazias (keep-alive)
+            # Print de mensagens recebidas
             print(f"Recebido de {ip_origem}: [{mensagem}]")
 
             # 1. Atualizar o tempo de atividade do vizinho que enviou
@@ -55,16 +53,14 @@ def thread_ouvinte_udp():
                     print(f"Novo vizinho adicionado: {ip}")
 
             # Parte 1: Anúncio de Rotas ou Keep-Alive
-            # Esta é a correção crucial: processar a limpeza de
-            # rotas mesmo se a mensagem for um keep-alive ("").
             elif mensagem == "" or mensagem.startswith("#"):
-                
+
                 # Se for um anúncio de rotas, processe.
                 # Se for um keep-alive (""), rotas_raw será [].
                 rotas_raw = []
                 if mensagem.startswith("#"):
                     rotas_raw = mensagem.split("#")[1:]
-                
+
                 mudanca_ocorreu = False
                 destinos_recebidos = set()
 
@@ -80,7 +76,7 @@ def thread_ouvinte_udp():
                         # Evita crash se rotas_raw for algo como ['']
                         if not rota_str:
                             continue
-                        
+
                         destino, metrica_str = rota_str.split("-")
                         destinos_recebidos.add(destino)  # Adicionar ao set
 
@@ -112,7 +108,7 @@ def thread_ouvinte_udp():
                         # (A rota de Métrica 1). Ela só morre por timeout.
                         if destino_antigo == ip_origem:
                             continue
-                        
+
                         # ...verificar se ela NÃO veio no novo anúncio
                         if destino_antigo not in destinos_recebidos:
                             # Se não veio, é uma rota órfã. Remover.
@@ -194,22 +190,27 @@ def thread_monitor_timeout():
     Thread 3: Verifica periodicamente se algum vizinho expirou (35s).
     """
     while True:
-        time.sleep(5)  # Verificar a cada 5 segundos, por exemplo
+        time.sleep(5)
         agora = time.time()
 
         with lock_tabela:
+
+            # Lista de vizinhos mortos
             vizinhos_mortos = []
             try:
                 for vizinho, ultimo_contato in vizinhos_ativos.items():
+
+                    # Se passou do tempo limite, marcar como morto
                     if agora - ultimo_contato > TEMPO_TIMEOUT:
                         vizinhos_mortos.append(vizinho)
             except RuntimeError:
                 # Dicionário foi alterado, tentar novamente no próximo ciclo
                 continue
 
+            # Se houver vizinhos mortos, remover suas rotas
             if vizinhos_mortos:
                 print(f"Vizinhos mortos detectados: {vizinhos_mortos}")
-                
+
                 mudanca_ocorreu = False
                 rotas_a_remover = []
 
@@ -232,7 +233,7 @@ def thread_monitor_timeout():
                         del vizinhos_ativos[vizinho]
 
                 print(f"Tabela atualizada após remoção: {tabela_roteamento}")
-                
+
                 # É uma boa prática anunciar mudanças imediatamente
                 # if mudanca_ocorreu:
                 #     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -241,10 +242,8 @@ def thread_monitor_timeout():
 
 def enviar_tabela_rotas(s):
     """
-    Envia a tabela de rotas para todos os vizinhos ativos, aplicando
-    a regra de Split Horizon.
-    Envia uma mensagem vazia (keep-alive) se a regra
-    remover todas as rotas.
+    Envia a tabela de rotas para todos os vizinhos ativos, aplicando a regra de Split Horizon.
+    Envia uma mensagem vazia (keep-alive) se a regra remover todas as rotas.
     """
 
     with lock_tabela:
@@ -259,14 +258,13 @@ def enviar_tabela_rotas(s):
 
         for destino, info in tabela_copia.items():
 
-            # --- AQUI ESTÁ A REGRA (SPLIT HORIZON) ---
+            # Aplicar a regra de Split Horizon
             if info["ip_saida"] == vizinho:
                 continue  # Não anunciar a rota de volta para quem a ensinou
 
             mensagem_rotas += f"#{destino}-{info['metrica']}"
 
-        # Enviar a mensagem (mesmo que vazia, como keep-alive)
-        # para reiniciar o timer de 35s do vizinho.
+        # Enviar a mensagem para reiniciar o timer de 35s do vizinho.
         print(
             f"Enviando (Split Horizon) para {vizinho}: {mensagem_rotas if mensagem_rotas else '(keep-alive)'}"
         )
@@ -280,9 +278,12 @@ def main():
         with open("roteadores.txt", "r") as f:
             for linha in f:
                 ip_vizinho = linha.strip().strip('"')
-                if ip_vizinho: # Ignorar linhas em branco
+                if ip_vizinho: 
                     vizinhos.append(ip_vizinho)
-                    tabela_roteamento[ip_vizinho] = {"metrica": 1, "ip_saida": ip_vizinho}
+                    tabela_roteamento[ip_vizinho] = {
+                        "metrica": 1,
+                        "ip_saida": ip_vizinho,
+                    }
                     vizinhos_ativos[ip_vizinho] = time.time()
     except FileNotFoundError:
         print("AVISO: Arquivo 'roteadores.txt' não encontrado. Iniciando sem vizinhos.")
@@ -296,7 +297,7 @@ def main():
     t_anunciante.start()
     t_monitor.start()
 
-    # 3. Enviar o "Anúncio de Roteador" (Mensagem 2) para os vizinhos
+    # 3. Enviar o "Anúncio de Roteador" para os vizinhos
     mensagem_ola = f"*{MEU_IP}"
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         for vizinho in vizinhos:
