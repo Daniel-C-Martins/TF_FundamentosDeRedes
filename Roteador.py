@@ -6,7 +6,7 @@ import time
 PORTA_UDP = 9000  # Porta UDP para comunicação entre roteadores
 TEMPO_ANUNCIO = 15  # Segundos para anunciar rotas
 TEMPO_TIMEOUT = 35  # Segundos para considerar um vizinho morto
-MEU_IP = "10.231.77.125"  # IP deste roteador
+MEU_IP = "10.231.77.125"  # !!! MUDE AQUI: IP deste roteador !!!
 
 # --- Estruturas de Dados ---
 # Tabela de Roteamento: { "ip_destino": {"metrica": 1, "ip_saida": "192.x.x.x"} }
@@ -38,7 +38,8 @@ def thread_ouvinte_udp():
             ip_origem = endereco[0]
             mensagem = dados.decode("utf-8")
 
-            print(f"Recebido de {ip_origem}: {mensagem}")
+            # Colchetes ajudam a ver mensagens vazias (keep-alive)
+            print(f"Recebido de {ip_origem}: [{mensagem}]")
 
             # 1. Atualizar o tempo de atividade do vizinho que enviou
             with lock_tabela:
@@ -53,13 +54,18 @@ def thread_ouvinte_udp():
                     vizinhos_ativos[ip] = time.time()
                     print(f"Novo vizinho adicionado: {ip}")
 
-            # Parte 1: Anúncio de Rotas
+            # Parte 1: Anúncio de Rotas ou Keep-Alive
+            # Esta é a correção crucial: processar a limpeza de
+            # rotas mesmo se a mensagem for um keep-alive ("").
             elif mensagem == "" or mensagem.startswith("#"):
-                rotas_raw = mensagem.split("#")[1:]
-
+                
+                # Se for um anúncio de rotas, processe.
+                # Se for um keep-alive (""), rotas_raw será [].
+                rotas_raw = []
+                if mensagem.startswith("#"):
+                    rotas_raw = mensagem.split("#")[1:]
+                
                 mudanca_ocorreu = False
-
-                # Criar um 'set' de destinos que acabaram de ser recebidos
                 destinos_recebidos = set()
 
                 with lock_tabela:
@@ -71,6 +77,10 @@ def thread_ouvinte_udp():
 
                     # 2. Processar as rotas recém-chegadas (adicionar/atualizar)
                     for rota_str in rotas_raw:
+                        # Evita crash se rotas_raw for algo como ['']
+                        if not rota_str:
+                            continue
+                        
                         destino, metrica_str = rota_str.split("-")
                         destinos_recebidos.add(destino)  # Adicionar ao set
 
@@ -95,16 +105,14 @@ def thread_ouvinte_udp():
                             mudanca_ocorreu = True
 
                     # 3. IMPLEMENTAR A REGRA (Remover rotas órfãs)
-                    # Para cada rota que tínhamos via 'ip_origem'...
+                    # Esta lógica agora roda mesmo com keep-alives ("")
                     for destino_antigo in rotas_atuais_deste_vizinho:
 
-                        # --- INÍCIO DA CORREÇÃO ---
                         # NUNCA remova a rota para o próprio vizinho
                         # (A rota de Métrica 1). Ela só morre por timeout.
                         if destino_antigo == ip_origem:
                             continue
-                        # --- FIM DA CORREÇÃO ---
-
+                        
                         # ...verificar se ela NÃO veio no novo anúncio
                         if destino_antigo not in destinos_recebidos:
                             # Se não veio, é uma rota órfã. Remover.
@@ -120,9 +128,7 @@ def thread_ouvinte_udp():
 
             # Parte 2: Mensagem de texto
             elif mensagem.startswith("!"):
-                #
                 try:
-
                     # Dividir a mensagem em partes
                     partes = mensagem[1:].split(";", 2)
 
@@ -176,8 +182,10 @@ def thread_anunciante_rotas():
             time.sleep(TEMPO_ANUNCIO)
             print("\n======================================")
             print("Tabela de Roteamento Anunciada:")
-            print(tabela_roteamento)
-            print("\n======================================")
+            with lock_tabela:
+                # Imprimir dentro do lock para evitar erro de dict alterado
+                print(tabela_roteamento)
+            print("======================================\n")
             enviar_tabela_rotas(s)
 
 
@@ -191,14 +199,18 @@ def thread_monitor_timeout():
 
         with lock_tabela:
             vizinhos_mortos = []
-            for vizinho, ultimo_contato in vizinhos_ativos.items():
-                if agora - ultimo_contato > TEMPO_TIMEOUT:
-                    vizinhos_mortos.append(vizinho)
+            try:
+                for vizinho, ultimo_contato in vizinhos_ativos.items():
+                    if agora - ultimo_contato > TEMPO_TIMEOUT:
+                        vizinhos_mortos.append(vizinho)
+            except RuntimeError:
+                # Dicionário foi alterado, tentar novamente no próximo ciclo
+                continue
 
             if vizinhos_mortos:
                 print(f"Vizinhos mortos detectados: {vizinhos_mortos}")
-
-                # --- Início da Lógica de Remoção ---
+                
+                mudanca_ocorreu = False
                 rotas_a_remover = []
 
                 # Encontra todas as rotas que dependem (usam como saída) dos vizinhos mortos
@@ -212,16 +224,19 @@ def thread_monitor_timeout():
                         f"Removendo rota para {destino} (via {tabela_roteamento[destino]['ip_saida']})"
                     )
                     del tabela_roteamento[destino]
+                    mudanca_ocorreu = True
 
                 # Remove os vizinhos mortos do rastreamento de atividade
                 for vizinho in vizinhos_mortos:
                     if vizinho in vizinhos_ativos:
                         del vizinhos_ativos[vizinho]
 
-                # with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                #     enviar_tabela_rotas(s)
-
                 print(f"Tabela atualizada após remoção: {tabela_roteamento}")
+                
+                # É uma boa prática anunciar mudanças imediatamente
+                # if mudanca_ocorreu:
+                #     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                #          enviar_tabela_rotas(s)
 
 
 def enviar_tabela_rotas(s):
@@ -232,27 +247,16 @@ def enviar_tabela_rotas(s):
     remover todas as rotas.
     """
 
-    # 1. Obter uma "foto" (snapshot) da tabela e dos vizinhos
-    #    dentro do lock para segurança em ambiente com threads.
     with lock_tabela:
-        # Copiamos para evitar problemas se a lista mudar
-        # enquanto iteramos sobre ela (fora do lock)
         try:
-            # Usar .keys() pode dar erro se o dict for modificado
-            # em outra thread, mesmo com lock.
             vizinhos_para_enviar = list(vizinhos_ativos.keys())
             tabela_copia = dict(tabela_roteamento)
         except RuntimeError:
-            # Dicionário foi alterado durante a iteração,
-            # pular este ciclo. Acontecerá de novo em 15s.
             return
 
-    # 2. Iterar sobre os vizinhos FORA do lock, para não bloquear
-    #    outras threads (como a ouvinte) enquanto enviamos pacotes.
     for vizinho in vizinhos_para_enviar:
         mensagem_rotas = ""
 
-        # 3. Construir uma mensagem personalizada para ESTE vizinho
         for destino, info in tabela_copia.items():
 
             # --- AQUI ESTÁ A REGRA (SPLIT HORIZON) ---
@@ -261,8 +265,8 @@ def enviar_tabela_rotas(s):
 
             mensagem_rotas += f"#{destino}-{info['metrica']}"
 
-        # 4. Enviar a mensagem (mesmo que vazia, como keep-alive)
-        #    para reiniciar o timer de 35s do vizinho.
+        # Enviar a mensagem (mesmo que vazia, como keep-alive)
+        # para reiniciar o timer de 35s do vizinho.
         print(
             f"Enviando (Split Horizon) para {vizinho}: {mensagem_rotas if mensagem_rotas else '(keep-alive)'}"
         )
@@ -272,12 +276,16 @@ def enviar_tabela_rotas(s):
 # --- Função Principal (Inicialização) ---
 def main():
     # 1. Ler roteadores.txt e popular 'vizinhos' e 'tabela_roteamento' inicial
-    with open("roteadores.txt", "r") as f:
-        for linha in f:
-            ip_vizinho = linha.strip().strip('"')
-            vizinhos.append(ip_vizinho)
-            tabela_roteamento[ip_vizinho] = {"metrica": 1, "ip_saida": ip_vizinho}
-            vizinhos_ativos[ip_vizinho] = time.time()
+    try:
+        with open("roteadores.txt", "r") as f:
+            for linha in f:
+                ip_vizinho = linha.strip().strip('"')
+                if ip_vizinho: # Ignorar linhas em branco
+                    vizinhos.append(ip_vizinho)
+                    tabela_roteamento[ip_vizinho] = {"metrica": 1, "ip_saida": ip_vizinho}
+                    vizinhos_ativos[ip_vizinho] = time.time()
+    except FileNotFoundError:
+        print("AVISO: Arquivo 'roteadores.txt' não encontrado. Iniciando sem vizinhos.")
 
     # 2. Iniciar as threads
     t_ouvinte = threading.Thread(target=thread_ouvinte_udp, daemon=True)
@@ -323,7 +331,7 @@ def main():
                 if not ip_destino or not mensagem_texto:
                     raise ValueError("Formato inválido")
 
-                # Formata a mensagem de texto completa [cite: 99, 100]
+                # [cite_start]Formata a mensagem de texto completa [cite: 99, 100]
                 mensagem_formatada = f"!{MEU_IP};{ip_destino};{mensagem_texto}"
 
                 # Encontrar o próximo salto (IP de Saída)
