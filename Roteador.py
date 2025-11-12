@@ -188,18 +188,45 @@ def thread_monitor_timeout():
 
 
 def enviar_tabela_rotas(s):
-    mensagem_rotas = ""
-    with lock_tabela:
+    """
+    Envia a tabela de rotas para todos os vizinhos ativos, aplicando
+    a regra de Split Horizon.
+    """
 
-        # Construir a mensagem de rotas no formato "#ip-metrica#ip-metrica"
-        for destino, info in tabela_roteamento.items():
+    # 1. Obter uma "foto" (snapshot) da tabela e dos vizinhos
+    #    dentro do lock para segurança em ambiente com threads.
+    with lock_tabela:
+        # Copiamos para evitar problemas se a lista mudar
+        # enquanto iteramos sobre ela (fora do lock)
+        vizinhos_para_enviar = list(vizinhos_ativos.keys())
+        tabela_copia = dict(tabela_roteamento)
+
+    # 2. Iterar sobre os vizinhos FORA do lock, para não bloquear
+    #    outras threads (como a ouvinte) enquanto enviamos pacotes.
+    for vizinho in vizinhos_para_enviar:
+        mensagem_rotas = ""
+
+        # 3. Construir uma mensagem personalizada para ESTE vizinho
+        for destino, info in tabela_copia.items():
+
+            # --- AQUI ESTÁ A SUA REGRA (SPLIT HORIZON) ---
+            # Se o IP de saída para este destino é o vizinho para
+            # quem estamos prestes a enviar, PULE esta rota.
+            if info["ip_saida"] == vizinho:
+                continue  # Não anunciar a rota de volta para quem a ensinou
+
+            # Se a regra não se aplica, adicione a rota à mensagem
             mensagem_rotas += f"#{destino}-{info['metrica']}"
 
-    # Enviar a mensagem para todos os vizinhos ativos
-    if mensagem_rotas:
-        for vizinho in vizinhos_ativos.keys():
-            print(f"Enviando para {vizinho}: {mensagem_rotas}")
+        # 4. Enviar a mensagem personalizada (se houver algo para enviar)
+        if mensagem_rotas:
+            print(f"Enviando (Split Horizon) para {vizinho}: {mensagem_rotas}")
             s.sendto(mensagem_rotas.encode("utf-8"), (vizinho, PORTA_UDP))
+        else:
+            # Opcional: bom para debug, mostra que a regra funcionou
+            print(
+                f"Enviando (Split Horizon) para {vizinho}: (Nenhuma rota para anunciar)"
+            )
 
 
 # --- Função Principal (Inicialização) ---
