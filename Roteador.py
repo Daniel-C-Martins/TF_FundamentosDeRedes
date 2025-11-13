@@ -342,6 +342,9 @@ def main():
                         )
                     print("----------------------------------\n")
                 continue
+            if entrada.lower() == "quit":
+                print("Desligando roteador...")
+                break
 
             try:
                 # Tenta dividir a entrada do usuário
