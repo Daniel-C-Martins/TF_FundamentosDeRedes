@@ -209,6 +209,7 @@ def thread_monitor_timeout():
         time.sleep(5)
         agora = time.time()
 
+        mudanca_ocorreu = False
         with lock_tabela:
 
             # Lista de vizinhos mortos
@@ -225,9 +226,9 @@ def thread_monitor_timeout():
 
             # Se houver vizinhos mortos, remover suas rotas
             if vizinhos_mortos:
+                print("\n")
                 print(f"Vizinhos mortos detectados: {vizinhos_mortos}")
 
-                mudanca_ocorreu = False
                 rotas_a_remover = []
 
                 # Encontra todas as rotas que dependem (usam como saída) dos vizinhos mortos
@@ -241,6 +242,7 @@ def thread_monitor_timeout():
                         f"Removendo rota para {destino} (via {tabela_roteamento[destino]['ip_saida']})"
                     )
                     del tabela_roteamento[destino]
+                    print("\n")
                     mudanca_ocorreu = True
 
                 # Remove os vizinhos mortos do rastreamento de atividade
@@ -250,10 +252,10 @@ def thread_monitor_timeout():
 
                 print(f"Tabela atualizada após remoção: {tabela_roteamento}")
 
-                # É uma boa prática anunciar mudanças imediatamente
-                # if mudanca_ocorreu:
-                #     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                #          enviar_tabela_rotas(s)
+        # É uma boa prática anunciar mudanças imediatamente
+        if mudanca_ocorreu:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                enviar_tabela_rotas(s)
 
 
 def enviar_tabela_rotas(s):
@@ -282,7 +284,7 @@ def enviar_tabela_rotas(s):
 
         # Enviar a mensagem para reiniciar o timer de 35s do vizinho.
         print(
-            f"Enviando (Split Horizon) para {vizinho}: {mensagem_rotas if mensagem_rotas else '(keep-alive)'}"
+            f"Enviando para {vizinho}: {mensagem_rotas if mensagem_rotas else 'keep-alive'}"
         )
         s.sendto(mensagem_rotas.encode("utf-8"), (vizinho, PORTA_UDP))
 
